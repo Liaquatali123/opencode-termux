@@ -1,0 +1,73 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "openrouter/openrouter/free",
+  "small_model": "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
+  "instructions": [
+    "$HOME/.config/opencode/AGENTS.md",
+    "$HOME/.config/opencode/AGENTS.md"
+  ],
+  "provider": {
+    "openrouter": {
+      "env": ["OPENROUTER_API_KEY"],
+      "options": {}
+    }
+  },
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "bash": {
+      "*": "ask",
+      "rm *": "deny",
+      "sudo *": "deny",
+      "chmod *": "deny",
+      "chown *": "deny",
+      "mkfs*": "deny",
+      "dd *": "deny",
+      "> /dev/*": "deny",
+      "git status": "allow",
+      "git diff": "allow",
+      "git add *": "allow",
+      "git commit *": "allow",
+      "git push *": "allow",
+      "git pull *": "allow",
+      "git log *": "allow",
+      "git checkout *": "allow",
+      "git branch *": "allow",
+      "git remote *": "allow",
+      "git stash *": "allow",
+      "git reset *": "allow",
+      "git merge *": "allow",
+      "git rebase *": "allow",
+      "git config *": "allow",
+      "git tag *": "allow",
+      "git fetch *": "allow",
+      "git show *": "allow",
+      "git clean *": "allow",
+      "git blame *": "allow",
+      "git describe *": "allow",
+      "git shortlog *": "allow",
+      "git cherry *": "allow",
+      "git worktree *": "allow",
+      "git submodule *": "allow",
+      "git mv *": "allow",
+      "git rm *": "allow",
+      "git bisect *": "allow",
+      "git grep *": "allow",
+      "git help": "allow",
+      "git *": "allow"
+    },
+    "external_directory": {
+      "/tmp/termux-ai-tool": "allow",
+      "/tmp/termux-ai-tool/**": "allow",
+      "/storage/emulated/0/Projects": "allow",
+      "/storage/emulated/0/Projects/**": "allow",
+      "/storage/emulated/0/Download": "allow",
+      "/storage/emulated/0/Download/**": "allow",
+      "/data/data/com.termux/files/home": "allow",
+      "/data/data/com.termux/files/home/**": "allow"
+    }
+  }
+}
