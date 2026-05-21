@@ -3,8 +3,7 @@
   "model": "openrouter/openrouter/free",
   "small_model": "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
   "instructions": [
-    "$HOME/.config/opencode/AGENTS.md",
-    "$HOME/.config/opencode/AGENTS.md"
+    "~/.config/opencode/AGENTS.md"
   ],
   "provider": {
     "openrouter": {
@@ -67,7 +66,9 @@
       "/storage/emulated/0/Download": "allow",
       "/storage/emulated/0/Download/**": "allow",
       "/data/data/com.termux/files/home": "allow",
-      "/data/data/com.termux/files/home/**": "allow"
+      "/data/data/com.termux/files/home/**": "allow",
+      "~/projects": "allow",
+      "~/projects/**": "allow"
     }
   }
 }

@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 # ============================================================
-# backup.sh — Backup all OpenCode + OpenRouter configs
+# backup.sh — Backup OpenCode + OpenRouter configs
 # ============================================================
-# Creates a timestamped backup of:
-#   - ~/.config/opencode/ (config, AGENTS.md, plugin/)
-#   - API key file
+# Saves everything needed to restore after a factory reset:
+#   - ~/.config/opencode/ (opencode.json, AGENTS.md, plugins)
+#   - API key from Android shared storage
 #   - Wrapper script at /usr/local/bin/opencode
+#   - npm global package list
+#   - OpenCode version info
+#   - Ubuntu proot-distro config (if available)
 #
 # Usage:
-#   bash backup.sh                    # default: backups/ folder
-#   bash backup.sh /sdcard/backups   # custom destination
+#   bash backup.sh                        # → backups/opencode-backup-<ts>/
+#   bash backup.sh /sdcard/backups        # custom location
+#   bash backup.sh /storage/emulated/0/   # save to Android storage
 # ============================================================
 
 set -e
@@ -38,44 +42,70 @@ else
     warn "~/.config/opencode/ not found"
 fi
 
-# --- 2. API key ---
-API_KEY_SRC="/storage/emulated/0/Download/ai_openrouter/configs/api_key.json"
-if [ -f "$API_KEY_SRC" ]; then
-    cp "$API_KEY_SRC" "$BACKUP_DIR/api_key.json"
-    ok "API key backed up"
-else
-    warn "API key file not found at $API_KEY_SRC"
+# --- 2. API key (try Android storage first, then local) ---
+API_KEY_FOUND=false
+for api_src in \
+    "/storage/emulated/0/Download/ai_openrouter/configs/api_key.json" \
+    "$HOME/.config/opencode/api_key.json"; do
+    if [ -f "$api_src" ]; then
+        cp "$api_src" "$BACKUP_DIR/api_key.json"
+        ok "API key backed up from $api_src"
+        API_KEY_FOUND=true
+        break
+    fi
+done
+if [ "$API_KEY_FOUND" = false ]; then
+    warn "No API key file found"
 fi
 
 # --- 3. Wrapper script ---
-if [ -f "/usr/local/bin/opencode" ] && [ ! -L "/usr/local/bin/opencode" ]; then
+if [ -f "/usr/local/bin/opencode" ]; then
     cp "/usr/local/bin/opencode" "$BACKUP_DIR/opencode-wrapper.sh"
     ok "Wrapper script backed up"
-elif [ -f "/usr/local/bin/opencode" ]; then
-    warn "Wrapper is a symlink — copying target"
-    cp "$(readlink -f /usr/local/bin/opencode)" "$BACKUP_DIR/opencode-wrapper.sh" 2>/dev/null || true
+else
+    warn "Wrapper script not found at /usr/local/bin/opencode"
 fi
 
-# --- 4. Node global packages ---
+# --- 4. Ubuntu proot container metadata ---
+PROOT_DIR="/data/data/com.termux/files/usr/var/lib/proot-distro"
+if [ -d "$PROOT_DIR" ]; then
+    # Save proot-distro list and Ubuntu release info
+    proot-distro list 2>/dev/null > "$BACKUP_DIR/proot-distro-list.txt" || true
+    if [ -f "$PROOT_DIR/containers/ubuntu/etc/os-release" ]; then
+        cp "$PROOT_DIR/containers/ubuntu/etc/os-release" "$BACKUP_DIR/ubuntu-os-release.txt"
+        ok "Ubuntu proot metadata saved"
+    fi
+fi
+
+# --- 5. Node global packages ---
 if command -v npm &>/dev/null; then
     npm list -g --depth=0 2>/dev/null > "$BACKUP_DIR/npm-global.txt"
     ok "npm global packages list saved"
 fi
 
-# --- 5. OpenCode binary info ---
+# --- 6. OpenCode binary info ---
 if command -v opencode &>/dev/null; then
     opencode --version 2>/dev/null > "$BACKUP_DIR/opencode-version.txt" || true
     which opencode > "$BACKUP_DIR/opencode-path.txt" 2>/dev/null || true
     ok "OpenCode version recorded"
 fi
 
-# --- 6. Summary ---
+# --- 7. Architecture info ---
+uname -a > "$BACKUP_DIR/system-info.txt" 2>/dev/null || true
+if [ -f /etc/os-release ]; then
+    cp /etc/os-release "$BACKUP_DIR/os-release.txt"
+fi
+ok "System info saved"
+
+# --- 8. Summary ---
 echo ""
-echo -e "${GREEN}══════════════════════════════════════════════${NC}"
+echo -e "${GREEN}════════════════════════════════════════════════${NC}"
 echo -e "${GREEN}  Backup complete: $BACKUP_DIR${NC}"
-echo -e "${GREEN}══════════════════════════════════════════════${NC}"
+echo -e "${GREEN}════════════════════════════════════════════════${NC}"
 echo ""
 ls -lh "$BACKUP_DIR/"
 echo ""
-info "To restore:  bash restore.sh $BACKUP_DIR"
+info "To restore on a fresh Termux:"
+info "  1. Install git + clone this repo"
+info "  2. bash restore.sh $BACKUP_DIR"
 echo ""

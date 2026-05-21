@@ -25,6 +25,15 @@
 - Auth: `Authorization: Bearer $OPENROUTER_API_KEY`
 - Default model in opencode config: `openrouter/openrouter/free` (auto-routing)
 - API key stored at: `/storage/emulated/0/Download/ai_openrouter/configs/api_key.json`
+  (Android storage, accessible from both Termux and Ubuntu proot)
+
+## Architecture
+- Android → Termux → proot-distro → Ubuntu 26.04 LTS → OpenCode
+- OpenCode and Node.js run inside the Ubuntu proot container
+- The API key file lives on the Android shared storage, mounted at
+  `/storage/emulated/0/` inside both Termux and the Ubuntu proot
+- The wrapper script at `/usr/local/bin/opencode` reads the key from Android
+  storage before launching OpenCode
 
 ## Provider Configuration
 OpenCode uses the `openrouter` provider with env-var-based auth:
