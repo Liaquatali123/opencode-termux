@@ -116,7 +116,7 @@ if ! command -v opencode &>/dev/null || [ ! -f "/usr/local/bin/opencode" ]; then
     info "OpenCode not found — reinstalling..."
     npm install -g opencode-ai
 
-    # Refresh wrapper with correct binary path
+    # Refresh wrapper with correct binary path and key path
     OPENCODE_REAL=$(find /usr /usr/local -name "opencode.exe" -path "*/opencode-ai/*" 2>/dev/null | head -1)
     if [ -n "$OPENCODE_REAL" ] && [ -f "/usr/local/bin/opencode" ]; then
         sed -i "s|OPENCODE_REAL=.*|OPENCODE_REAL=\"$OPENCODE_REAL\"|" "/usr/local/bin/opencode"

@@ -241,8 +241,9 @@ fi
 
 ok "Real binary found at: $OPENCODE_REAL"
 
-# Generate wrapper with correct path
-sed "s|OPENCODE_REAL=.*|OPENCODE_REAL=\"$OPENCODE_REAL\"|" \
+# Generate wrapper with correct paths
+sed -e "s|OPENCODE_REAL=.*|OPENCODE_REAL=\"$OPENCODE_REAL\"|" \
+    -e "s|KEY_FILE=.*|KEY_FILE=\"$SHARED_KEY_DIR/api_key.json\"|" \
     "$WRAPPER_SRC" > /tmp/opcode-wrapper-install
 
 cp /tmp/opcode-wrapper-install "$WRAPPER_DST"

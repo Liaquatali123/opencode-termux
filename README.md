@@ -228,22 +228,26 @@ The wrapper is a bash script that runs before OpenCode. It:
 1. Reads the API key from Android storage (`/storage/emulated/0/.../api_key.json`)
 2. Falls back to local key file if Android storage isn't mounted
 3. Exports `OPENROUTER_API_KEY` into the environment
-4. Execs the real OpenCode binary
-
-This guarantees the API key is always present regardless of shell profile,
-login state, or Termux reinstall.
+4. **Injects the API key into provider options via `OPENCODE_CONFIG_CONTENT`**
+   (the `env` field in config only lists the env var name — it doesn't pass the
+   value to HTTP headers; explicit `apiKey` in options fixes this)
+5. Execs the real OpenCode binary
 
 ```bash
-KEY_FILE="/storage/emulated/0/Download/ai_openrouter/configs/api_key.json"
-LOCAL_KEY_FILE="$HOME/.config/opencode/api_key.json"
-
-if [ -f "$KEY_FILE" ]; then
-    export OPENROUTER_API_KEY=$(python3 ...)
-elif [ -f "$LOCAL_KEY_FILE" ]; then
-    export OPENROUTER_API_KEY=$(python3 ...)
+if [ -n "$API_KEY" ]; then
+    export OPENROUTER_API_KEY="$API_KEY"
+    export OPENCODE_CONFIG_CONTENT='{"provider":{"openrouter":{"options":{"apiKey":"'"$API_KEY"'"}}}}'
 fi
 exec "$OPENCODE_REAL" "$@"
 ```
+
+**Why `OPENCODE_CONFIG_CONTENT`?**
+OpenCode's `openrouter` provider detects the `OPENROUTER_API_KEY` env var but
+does NOT automatically include it as an `Authorization` header in API requests.
+The `env` config field only tells opencode "this env var exists" — it doesn't
+inject its value into the HTTP client. By setting `options.apiKey` via
+`OPENCODE_CONFIG_CONTENT`, the provider receives the key in the format it
+actually uses for authentication.
 
 ---
 
@@ -318,22 +322,28 @@ opencode
 
 ### "Missing Authentication header"
 
-**Cause:** OpenCode started without `OPENROUTER_API_KEY` in the environment.
+**Cause:** OpenCode's `openrouter` provider didn't receive the API key in
+`options.apiKey`. The env var is detected but not passed to HTTP headers.
 
 **Fix:**
 ```bash
-# 1. Check the API key file
+# 1. Check the API key file exists
 cat /storage/emulated/0/Download/ai_openrouter/configs/api_key.json
 
-# 2. If missing or placeholder:
-echo '{"key":"sk-or-your-real-key","saved":"2026-01-01T00:00:00"}' \
-  > /storage/emulated/0/Download/ai_openrouter/configs/api_key.json
-
-# 3. Verify wrapper:
+# 2. Verify wrapper injects key via OPENCODE_CONFIG_CONTENT:
 cat /usr/local/bin/opencode
+# Should contain: export OPENCODE_CONFIG_CONTENT='{"provider":{"openrouter":{"options":{"apiKey":"...'
 
-# 4. Restart:
-opencode
+# 3. Test auth directly:
+curl -s -o /dev/null -w "HTTP %{http_code}" \
+  -X POST "https://openrouter.ai/api/v1/chat/completions" \
+  -H "Authorization: Bearer $(cat /storage/emulated/0/Download/ai_openrouter/configs/api_key.json | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"key\"])')" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"openrouter/free","messages":[{"role":"user","content":"ping"}],"max_tokens":5}'
+# HTTP 200 = auth works, HTTP 429/5xx = key valid but rate-limited
+
+# 4. If auth still fails, reinstall wrapper:
+bash install.sh
 ```
 
 ### "Command not found: opencode"
