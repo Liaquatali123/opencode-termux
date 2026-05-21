@@ -3,28 +3,25 @@
 # install.sh — OpenCode + OpenRouter setup for Termux → Ubuntu
 # ============================================================
 # Architecture:
-#   Android → Termux → proot-distro → Ubuntu 26.04 → OpenCode
+#   Android → Termux → proot-distro → Ubuntu → OpenCode
 #
-# Why Ubuntu/proot?
-#   OpenCode's Node.js runtime has better compatibility on
-#   Ubuntu aarch64 than on native Termux ARM64. The proot
-#   container provides a full Linux environment with apt,
-#   proper file paths, and fewer ARM64 compatibility issues.
-#
-# Usage:
+# Usage (fresh Termux):
 #   pkg install git -y
 #   git clone https://github.com/Liaquatali123/opencode-termux.git
 #   cd opencode-termux
 #   bash install.sh
+#   opencode
 #
 # What it does:
-#   ▸ Detects Termux vs Ubuntu environment
-#   ▸ Termux mode: installs proot-distro, sets up Ubuntu, copies
-#     repo into Ubuntu, runs install.sh inside Ubuntu
-#   ▸ Ubuntu mode: installs Node.js, OpenCode, config, wrapper,
-#     API key setup, verification
-#   ▸ Shared API key on Android storage for persistence across
-#     Termux reinstalls
+#   1. Detects Termux vs Ubuntu environment
+#   2. Termux: installs proot-distro + Ubuntu, copies repo in, runs inside
+#   3. Ubuntu: installs Node.js 22 + npm via apt
+#   4. Installs OpenCode globally via npm
+#   5. Creates ~/.config/opencode/ with opencode.json + AGENTS.md
+#   6. Installs wrapper at /usr/local/bin/opencode (loads API key, injects auth)
+#   7. Auto-detects existing API key on Android storage (no re-prompt)
+#   8. Creates Termux launcher so 'opencode' works from Termux shell
+#   9. Verifies everything end-to-end
 # ============================================================
 
 set -e
@@ -37,6 +34,10 @@ ok()    { echo -e "${GREEN}[OK]${NC}    $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $1"; }
 err()   { echo -e "${RED}[ERR]${NC}   $1"; }
 
+# Shared paths
+SHARED_KEY_DIR="/storage/emulated/0/Download/ai_openrouter/configs"
+LOCAL_KEY_DIR="$HOME/.config/opencode"
+
 # ============================================================
 echo -e "\n${CYAN}╔══════════════════════════════════════════════╗${NC}"
 echo -e "${CYAN}║   OpenCode + OpenRouter  |  Termux → Ubuntu  ║${NC}"
@@ -47,25 +48,31 @@ echo -e "${CYAN}╚════════════════════�
 # ============================================================
 IS_TERMUX=false
 IS_UBUNTU=false
+INSIDE_UBUNTU=false
 
-if [ -f "/data/data/com.termux/files/usr/bin/pkg" ] && \
-   [ -d "/data/data/com.termux" ]; then
-    IS_TERMUX=true
-    info "Detected: Termux (native Android environment)"
-elif [ -f "/etc/os-release" ] && grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+[ "$1" = "--inside-ubuntu" ] && INSIDE_UBUNTU=true
+
+# Check Ubuntu FIRST — Termux files are bind-mounted inside proot
+if [ -f "/etc/os-release" ] && grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
     IS_UBUNTU=true
-    info "Detected: Ubuntu $(grep VERSION_ID /etc/os-release 2>/dev/null | cut -d'"' -f2)"
+    info "Detected: Ubuntu $(grep VERSION_ID /etc/os-release | cut -d'\"' -f2)"
+elif [ -f "/data/data/com.termux/files/usr/bin/pkg" ] && \
+     [ -d "/data/data/com.termux" ]; then
+    IS_TERMUX=true
+    info "Detected: Termux (native Android)"
+elif [ "$INSIDE_UBUNTU" = true ]; then
+    info "Running with --inside-ubuntu flag"
 else
     warn "Unknown environment — continuing with generic Linux setup"
 fi
 
 # ============================================================
-# TERMUX MODE: Install proot-distro + Ubuntu, then re-run inside
+# TERMUX MODE: Install proot + Ubuntu, then re-run inside
 # ============================================================
-if [ "$IS_TERMUX" = true ]; then
-    info "Termux detected — setting up Ubuntu proot container..."
+if [ "$IS_TERMUX" = true ] && [ "$INSIDE_UBUNTU" = false ]; then
+    info "Setting up Ubuntu proot container..."
 
-    # --- Install proot-distro if missing ---
+    # Install proot-distro
     if ! command -v proot-distro &>/dev/null; then
         info "Installing proot-distro..."
         pkg update -y
@@ -75,63 +82,45 @@ if [ "$IS_TERMUX" = true ]; then
         ok "proot-distro already installed"
     fi
 
-    # --- Install or update Ubuntu ---
+    # Install Ubuntu if missing
     UBUNTU_ROOT="/data/data/com.termux/files/usr/var/lib/proot-distro/containers/ubuntu"
-    UBUNTU_LOGIN="proot-distro login ubuntu"
-
     if [ ! -d "$UBUNTU_ROOT" ] || [ ! -f "$UBUNTU_ROOT/etc/os-release" ]; then
-        info "Installing Ubuntu 26.04 LTS (this may take a few minutes)..."
+        info "Installing Ubuntu 26.04 LTS (may take a few minutes)..."
         proot-distro install ubuntu
         ok "Ubuntu installed"
     else
-        ok "Ubuntu already installed ($(grep VERSION_ID "$UBUNTU_ROOT/etc/os-release" 2>/dev/null | cut -d'"' -f2))"
+        ok "Ubuntu already installed ($(grep VERSION_ID "$UBUNTU_ROOT/etc/os-release" 2>/dev/null | cut -d'\"' -f2))"
     fi
 
-    # --- Copy repo into Ubuntu container ---
+    # Copy repo into Ubuntu container (excluding .git)
     UBUNTU_REPO="$UBUNTU_ROOT/root/opencode-termux"
-    info "Copying repo into Ubuntu container at $UBUNTU_REPO..."
+    info "Copying repo into Ubuntu container..."
     rm -rf "$UBUNTU_REPO"
     mkdir -p "$UBUNTU_REPO"
-    cp -r "$REPO_DIR"/* "$UBUNTU_REPO/"
-    ok "Repo copied to Ubuntu container"
+    for item in "$REPO_DIR"/*; do
+        [ -e "$item" ] && cp -r "$item" "$UBUNTU_REPO/"
+    done
+    ok "Repo copied to $UBUNTU_REPO"
 
-    # --- Ensure shared Android storage is accessible inside proot ---
-    # proot-distro typically mounts /storage automatically, but verify
-    if [ ! -d "$UBUNTU_ROOT/storage/emulated/0" ]; then
-        warn "Android storage may not be mounted inside proot automatically."
-        warn "OpenCode wrapper needs access to:"
-        warn "  /storage/emulated/0/Download/ai_openrouter/configs/api_key.json"
-        warn ""
-        warn "If missing, restart Termux and re-run install.sh"
-    fi
-
-    # --- Run installer inside Ubuntu ---
+    # Run installer inside Ubuntu
     echo ""
-    info "Switching to Ubuntu proot environment..."
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}  The installer will continue inside Ubuntu.${NC}"
-    echo -e "${YELLOW}  You may be prompted for API key.${NC}"
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-
-    # Run install.sh inside Ubuntu (the --inside-ubuntu flag skips this check)
+    info "Continuing installation inside Ubuntu proot..."
     proot-distro login ubuntu -- bash -c "
-        cd /root/opencode-termux && bash install.sh --inside-ubuntu
+        export HOME=/root
+        cd /root/opencode-termux
+        bash install.sh --inside-ubuntu
     "
 
-    # --- Create launcher in Termux that enters proot and runs opencode ---
+    # Create Termux launcher so 'opencode' works from Termux
     TERMUX_LAUNCHER="/data/data/com.termux/files/usr/bin/opencode"
     if [ ! -f "$TERMUX_LAUNCHER" ]; then
-        info "Creating Termux launcher script: $TERMUX_LAUNCHER"
+        info "Creating Termux launcher: $TERMUX_LAUNCHER"
         cat > "$TERMUX_LAUNCHER" << 'LAUNCHER'
 #!/data/data/com.termux/files/usr/bin/bash
-# OpenCode launcher for Termux — enters Ubuntu proot and runs opencode
-exec proot-distro login ubuntu -- bash -c "export HOME=/root && cd ~ && exec opencode \"$@\""
+exec proot-distro login ubuntu -- bash -c "export HOME=/root && cd ~ && exec /usr/local/bin/opencode \"$@\""
 LAUNCHER
         chmod +x "$TERMUX_LAUNCHER"
-        ok "Termux launcher created: termux-open  (or just: opencode)"
-        warn "Note: 'opencode' command currently points to proot launcher."
-        warn "If it conflicts with another binary, use: termux-open"
+        ok "Termux launcher created. Now type: opencode"
     else
         ok "Termux launcher already exists"
     fi
@@ -141,83 +130,44 @@ LAUNCHER
     echo -e "${GREEN}║     Termux → Ubuntu Setup Complete!        ║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════════════╝${NC}"
     echo ""
-    echo "  Run OpenCode from Termux:"
-    echo "    opencode"
-    echo ""
-    echo "  Or enter Ubuntu manually:"
-    echo "    proot-distro login ubuntu"
+    echo "  Next step:"
     echo "    opencode"
     echo ""
     exit 0
 fi
 
 # ============================================================
-# UBUNTU / GENERIC LINUX MODE: Actual installation
+# UBUNTU / LINUX MODE: Install Node.js, OpenCode, configs
 # ============================================================
-# If we reach here, we're inside Ubuntu (or another Linux distro)
 
-# --- Skip the "inside Ubuntu" guard if --inside-ubuntu flag is passed ---
-INSIDE_UBUNTU=false
-if [ "$1" = "--inside-ubuntu" ]; then
-    INSIDE_UBUNTU=true
-fi
+# --- 1. Update apt cache ---
+info "Updating apt package cache..."
+apt update -qq 2>/dev/null || true
 
-if [ "$IS_UBUNTU" = false ] && [ "$INSIDE_UBUNTU" = false ]; then
-    warn "Not running inside Ubuntu."
-    warn "If you are running this from inside a proot container,"
-    warn "use: bash install.sh --inside-ubuntu"
-fi
-
-# --- 1. Install Node.js + npm ---
+# --- 2. Install Node.js + npm ---
 info "Checking Node.js..."
 if command -v node &>/dev/null; then
-    ok "Node.js $(node -v) already installed"
+    ok "Node.js $(node -v)"
 else
-    info "Installing Node.js via apt..."
-    apt update -qq && apt install -y -qq nodejs npm 2>/dev/null || {
-        # Fallback: nodesource
+    info "Installing Node.js + npm via apt..."
+    apt install -y -qq nodejs npm 2>/dev/null || {
         curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
         apt install -y nodejs
     }
     ok "Node.js $(node -v) installed"
 fi
 
-# --- 2. Install OpenCode ---
+# --- 3. Install OpenCode ---
 info "Checking OpenCode..."
-if command -v opencode &>/dev/null && [ -x "$(command -v opencode)" ]; then
-    ok "OpenCode $(opencode --version 2>/dev/null) already installed"
+if OPENCODE_VER=$(opencode --version 2>/dev/null); then
+    ok "OpenCode $OPENCODE_VER"
 else
-    info "Installing OpenCode globally via npm..."
+    info "Installing OpenCode via npm..."
     npm install -g opencode-ai
-    ok "OpenCode $(opencode --version 2>/dev/null) installed"
+    ok "OpenCode $(opencode --version) installed"
 fi
 
-# --- 3. Create config directory ---
-info "Setting up config directory..."
-OPENCODE_CONFIG_DIR="$HOME/.config/opencode"
-mkdir -p "$OPENCODE_CONFIG_DIR"
-
-# --- 4. Copy opencode.json ---
-if [ -f "$REPO_DIR/configs/opencode.json" ]; then
-    cp "$REPO_DIR/configs/opencode.json" "$OPENCODE_CONFIG_DIR/opencode.json"
-    ok "Config copied: $OPENCODE_CONFIG_DIR/opencode.json"
-else
-    err "configs/opencode.json not found in repo!"
-    exit 1
-fi
-
-# --- 5. Copy AGENTS.md ---
-if [ -f "$REPO_DIR/AGENTS.md" ]; then
-    cp "$REPO_DIR/AGENTS.md" "$OPENCODE_CONFIG_DIR/AGENTS.md"
-    ok "AGENTS.md copied"
-fi
-
-# --- 6. Install wrapper ---
-info "Installing opencode wrapper..."
-WRAPPER_SRC="$REPO_DIR/scripts/opencode-wrapper.sh"
-WRAPPER_DST="/usr/local/bin/opencode"
-
-# Find the real opencode binary (npm global install location varies)
+# --- 4. Find real opencode binary ---
 OPENCODE_REAL=""
 for candidate in \
     "/usr/local/lib/node_modules/opencode-ai/bin/opencode.exe" \
@@ -228,129 +178,156 @@ for candidate in \
         break
     fi
 done
-
 if [ -z "$OPENCODE_REAL" ]; then
     OPENCODE_REAL=$(find /usr /usr/local -name "opencode.exe" -path "*/opencode-ai/*" 2>/dev/null | head -1)
 fi
-
 if [ -z "$OPENCODE_REAL" ]; then
     err "Cannot find opencode binary! npm install may have failed."
     err "Check: npm root -g"
     exit 1
 fi
+ok "Real binary: $OPENCODE_REAL"
 
-ok "Real binary found at: $OPENCODE_REAL"
+# --- 5. Create config directory ---
+OPENCODE_CONFIG_DIR="$HOME/.config/opencode"
+mkdir -p "$OPENCODE_CONFIG_DIR"
 
-# Generate wrapper with correct paths
-sed -e "s|OPENCODE_REAL=.*|OPENCODE_REAL=\"$OPENCODE_REAL\"|" \
-    -e "s|KEY_FILE=.*|KEY_FILE=\"$SHARED_KEY_DIR/api_key.json\"|" \
+# --- 6. Copy opencode.json ---
+if [ -f "$REPO_DIR/configs/opencode.json" ]; then
+    cp "$REPO_DIR/configs/opencode.json" "$OPENCODE_CONFIG_DIR/opencode.json"
+    ok "Config: $OPENCODE_CONFIG_DIR/opencode.json"
+else
+    err "configs/opencode.json not found in repo!"
+    exit 1
+fi
+
+# --- 7. Copy AGENTS.md ---
+if [ -f "$REPO_DIR/AGENTS.md" ]; then
+    cp "$REPO_DIR/AGENTS.md" "$OPENCODE_CONFIG_DIR/AGENTS.md"
+    ok "AGENTS.md copied"
+fi
+
+# --- 8. Install wrapper ---
+info "Installing wrapper at /usr/local/bin/opencode..."
+WRAPPER_SRC="$REPO_DIR/scripts/opencode-wrapper.sh"
+WRAPPER_DST="/usr/local/bin/opencode"
+
+# Fill in the correct paths in the wrapper template
+sed -e "s|^OPENCODE_REAL=.*|OPENCODE_REAL=\"$OPENCODE_REAL\"|" \
     "$WRAPPER_SRC" > /tmp/opcode-wrapper-install
 
 cp /tmp/opcode-wrapper-install "$WRAPPER_DST"
 chmod +x "$WRAPPER_DST"
 rm -f /tmp/opcode-wrapper-install
-ok "Wrapper installed: $WRAPPER_DST"
+ok "Wrapper: $WRAPPER_DST"
 
-# --- 7. Create launcher in /usr/local/bin if not exists ---
-if [ ! -f "/usr/local/bin/opencode" ]; then
-    # Shouldn't happen since we just installed it above, but just in case
-    warn "Wrapper not found at /usr/local/bin/opencode"
-    cp "$WRAPPER_SRC" "/usr/local/bin/opencode"
-    chmod +x "/usr/local/bin/opencode"
-    ok "Wrapper created at /usr/local/bin/opencode"
+# --- 9. API key ---
+mkdir -p "$SHARED_KEY_DIR" 2>/dev/null || true
+mkdir -p "$LOCAL_KEY_DIR" 2>/dev/null || true
+
+# Check for existing key on Android storage
+API_KEY=""
+if [ -f "$SHARED_KEY_DIR/api_key.json" ]; then
+    API_KEY=$(python3 -c "import json;print(json.load(open('$SHARED_KEY_DIR/api_key.json')).get('key',''))" 2>/dev/null || echo "")
 fi
 
-# --- 8. API key setup ---
-# The API key is stored on Android storage so it persists across
-# Termux reinstalls. It's accessible from inside the proot at:
-#   /storage/emulated/0/Download/ai_openrouter/configs/api_key.json
-SHARED_KEY_DIR="/storage/emulated/0/Download/ai_openrouter/configs"
+# Fallback: check local
+if [ -z "$API_KEY" ] && [ -f "$LOCAL_KEY_DIR/api_key.json" ]; then
+    API_KEY=$(python3 -c "import json;print(json.load(open('$LOCAL_KEY_DIR/api_key.json')).get('key',''))" 2>/dev/null || echo "")
+fi
 
-if [ -d "/storage/emulated/0" ]; then
-    # Android storage is accessible (we're inside proot with bind mount)
-    mkdir -p "$SHARED_KEY_DIR"
-
-    if [ ! -f "$SHARED_KEY_DIR/api_key.json" ]; then
-        info "No API key found on Android shared storage."
-        echo -e "\n${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "${YELLOW}  OpenRouter API Key Setup${NC}"
-        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo ""
-        echo "  Get a free API key at: https://openrouter.ai/keys"
-        echo ""
-        read -r -p "  Paste your OpenRouter API key (sk-or-...): " USER_KEY
-        if [ -n "$USER_KEY" ]; then
-            echo "{\"key\": \"$USER_KEY\", \"saved\": \"$(date -Iseconds)\"}" > "$SHARED_KEY_DIR/api_key.json"
+if [ -n "$API_KEY" ] && [ "$API_KEY" != "YOUR_OPENROUTER_API_KEY_HERE" ]; then
+    ok "API key loaded: ${API_KEY:0:12}..."
+    # Ensure it's on Android storage (for persistence)
+    if [ -d "/storage/emulated/0" ]; then
+        echo "{\"key\": \"$API_KEY\", \"saved\": \"$(date -Iseconds)\"}" > "$SHARED_KEY_DIR/api_key.json"
+    fi
+else
+    # Prompt for key
+    echo ""
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}  OpenRouter API Key Setup${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo "  Get a free key: https://openrouter.ai/keys"
+    echo ""
+    read -r -p "  Paste your OpenRouter API key (sk-or-...): " USER_KEY
+    if [ -n "$USER_KEY" ]; then
+        API_KEY="$USER_KEY"
+        if [ -d "/storage/emulated/0" ]; then
+            echo "{\"key\": \"$API_KEY\", \"saved\": \"$(date -Iseconds)\"}" > "$SHARED_KEY_DIR/api_key.json"
             ok "API key saved to Android storage: $SHARED_KEY_DIR/api_key.json"
         else
-            warn "No key entered. You can set it later:"
-            warn "  echo '{\"key\":\"sk-or-...\"}' > $SHARED_KEY_DIR/api_key.json"
-        fi
-    else
-        ok "API key file already exists on Android storage"
-    fi
-else
-    # Android storage not mounted (running on bare Linux, not Termux/proot)
-    warn "Android storage not accessible — saving API key locally."
-    LOCAL_KEY_DIR="$HOME/.config/opencode"
-    if [ ! -f "$LOCAL_KEY_DIR/api_key.json" ]; then
-        info "No API key found."
-        echo -e "\n${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "${YELLOW}  OpenRouter API Key Setup${NC}"
-        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo ""
-        read -r -p "  Paste your OpenRouter API key (sk-or-...): " USER_KEY
-        if [ -n "$USER_KEY" ]; then
-            echo "{\"key\": \"$USER_KEY\", \"saved\": \"$(date -Iseconds)\"}" > "$LOCAL_KEY_DIR/api_key.json"
+            echo "{\"key\": \"$API_KEY\", \"saved\": \"$(date -Iseconds)\"}" > "$LOCAL_KEY_DIR/api_key.json"
             ok "API key saved to $LOCAL_KEY_DIR/api_key.json"
         fi
+    else
+        warn "No key entered. Set it later with:"
+        warn "  echo '{\"key\":\"sk-or-...\"}' > $SHARED_KEY_DIR/api_key.json"
     fi
 fi
 
-# --- 9. Verify installation ---
-echo -e "\n${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-info "Verifying installation..."
+# Save API key to where the wrapper can find it
+if [ -n "$API_KEY" ] && [ "$API_KEY" != "YOUR_OPENROUTER_API_KEY_HERE" ]; then
+    export OPENROUTER_API_KEY="$API_KEY"
+fi
+
+# --- 10. Verify ---
 echo ""
-
+info "Verifying installation..."
 errors=0
-command -v opencode &>/dev/null && ok "opencode in PATH" || { warn "opencode not in PATH"; ((errors++)); }
-[ -f "$OPENCODE_CONFIG_DIR/opencode.json" ] && ok "Config present" || { warn "Config missing"; ((errors++)); }
-[ -x "/usr/local/bin/opencode" ] && ok "Wrapper executable" || { warn "Wrapper missing"; ((errors++)); }
-command -v node &>/dev/null && ok "Node.js $(node -v)" || { err "Node.js missing"; ((errors++)); }
+command -v opencode &>/dev/null && ok "✓ opencode in PATH" || { err "opencode not in PATH"; ((errors++)); }
+[ -f "$OPENCODE_CONFIG_DIR/opencode.json" ] && ok "✓ Config: opencode.json" || { warn "Config missing"; ((errors++)); }
+[ -x "$WRAPPER_DST" ] && ok "✓ Wrapper: $WRAPPER_DST" || { warn "Wrapper missing"; ((errors++)); }
+command -v node &>/dev/null && ok "✓ Node.js $(node -v)" || { err "Node.js missing"; ((errors++)); }
+command -v npm &>/dev/null && ok "✓ npm $(npm -v)" || true
 
-if [ -f "$SHARED_KEY_DIR/api_key.json" ] || [ -f "$HOME/.config/opencode/api_key.json" ]; then
-    KEY_FILE="${SHARED_KEY_DIR}/api_key.json"
-    [ ! -f "$KEY_FILE" ] && KEY_FILE="$HOME/.config/opencode/api_key.json"
-    KEY=$(python3 -c "import json; print(json.load(open('$KEY_FILE')).get('key','')[:12])" 2>/dev/null)
-    if [ -n "$KEY" ] && [ "$KEY" != "YOUR_OPENRO" ]; then
-        ok "API key configured: ${KEY}..."
-    else
-        warn "API key appears to be a placeholder"
-    fi
+if [ -n "$API_KEY" ] && [ "$API_KEY" != "YOUR_OPENROUTER_API_KEY_HERE" ]; then
+    ok "✓ API key configured: ${API_KEY:0:12}..."
 else
-    warn "No API key file found — set it before running opencode"
+    warn "API key not configured"
     ((errors++))
 fi
 
-# --- 10. Done ---
+# Test auth with actual API call
+if [ -n "$API_KEY" ] && [ "$API_KEY" != "YOUR_OPENROUTER_API_KEY_HERE" ]; then
+    echo ""
+    info "Testing OpenRouter API connection..."
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X POST "https://openrouter.ai/api/v1/chat/completions" \
+        -H "Authorization: Bearer $API_KEY" \
+        -H "Content-Type: application/json" \
+        -d '{"model":"openrouter/free","messages":[{"role":"user","content":"ping"}],"max_tokens":5}' 2>/dev/null || echo "000")
+    if [ "$HTTP_CODE" = "200" ]; then
+        ok "✓ OpenRouter API: connected (HTTP $HTTP_CODE)"
+    elif [ "$HTTP_CODE" = "429" ]; then
+        ok "✓ OpenRouter API: connected (HTTP $HTTP_CODE — rate limited, auth OK)"
+    elif [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
+        err "OpenRouter API: auth failed (HTTP $HTTP_CODE)"
+        ((errors++))
+    else
+        warn "OpenRouter API: HTTP $HTTP_CODE (may be network issue)"
+    fi
+fi
+
+# --- 11. Done ---
 echo ""
 if [ "$errors" -eq 0 ]; then
     echo -e "${GREEN}╔══════════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}║        Installation Complete!               ║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════════════╝${NC}"
     echo ""
-    echo "  Architecture:  Android → Termux → proot-distro → Ubuntu → OpenCode"
+    echo "  Terminal: $IS_TERMUX"
+    echo "  Ubuntu:   $IS_UBUNTU"
+    echo "  Node:     $(node -v)"
+    echo "  OpenCode: $(opencode --version)"
     echo ""
     echo "  Next step:"
     echo "    opencode"
     echo ""
-    echo "  OpenCode connects to OpenRouter using your free API key."
-    echo "  Model auto-routing selects the best available free model."
-    echo ""
-    echo "  Backup:  bash backup.sh"
-    echo "  Restore: bash restore.sh"
+    echo "  Backup:   bash backup.sh"
+    echo "  Restore:  bash restore.sh"
 else
     echo -e "${YELLOW}Installation completed with $errors warning(s).${NC}"
-    echo "  Check the warnings above and fix before running opencode."
+    echo "  Check the warnings above before running opencode."
 fi
 echo ""
