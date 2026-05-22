@@ -1,17 +1,17 @@
 # OpenRouter Free Model Fallback System
 
-## Model Priority (auto-fallback order)
-1. `openrouter/free` (auto-routes across free models) ✅ Working
-2. `qwen/qwen3-coder:free` (code-optimized, 480B params) ⏳ May be rate-limited
-3. `deepseek/deepseek-v4-flash:free` (fast inference) ⏳ May be rate-limited
-4. `meta-llama/llama-3.3-70b-instruct:free` (large context 128K) ⏳ May be rate-limited
-5. `google/gemma-4-26b-a4b-it:free` (fallback) ⏳ May be rate-limited
+## Model Availability (verified 2026-05-22)
+- `openrouter/free` — ✅ Auto-routing (intermittent 404 on some providers)
+- `qwen/qwen3-coder:free` — ⏳ 429 daily rate limit exhausted
+- `deepseek/deepseek-chat:free` — ❌ 404 Model not found (deprecated)
+- `meta-llama/llama-3.3-70b-instruct:free` — ⏳ 429 daily rate limit exhausted
+- `google/gemma-4-26b-a4b-it:free` — ⏳ 429 daily rate limit exhausted
+- `nvidia/nemotron-3-nano-30b-a3b:free` — ⏳ 429 daily rate limit exhausted
 
-## Fallback Behavior
-- If the current model returns a 429 (rate limit) or 5xx error, automatically switch to next model
-- The active model is persisted in `/tmp/opencode-active-model`
-- On session restart, the last working model is used
-- No manual intervention needed
+## Transient Error Handling
+- `[OpenInference] Model not found` = OpenRouter auto-routing chose a provider
+  that doesn't have the model. This is transient — retry the same command.
+- If `openrouter/free` fails, wait 10-30s and retry. Routing changes per request.
 
 ## Coding Optimization
 - Prefer concise responses (minimize tokens)
