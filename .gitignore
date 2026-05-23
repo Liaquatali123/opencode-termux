@@ -1,0 +1,7 @@
+# Backup files - keep local, never push secrets to GitHub
+backups/*/api_key.json
+backups/*/opencode.db
+backups/*/opencode-config/api_key.json
+
+# Node
+node_modules/

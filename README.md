@@ -39,6 +39,28 @@ shared between Termux and the Ubuntu proot, so it survives Termux reinstalls.
 
 ---
 
+## Crash Recovery
+
+Opencode sessions auto-save to SQLite. If opencode crashes, just run it again.
+
+**Full backup (config + API key + wrapper):**
+```bash
+cd ~/opencode-termux
+bash backup.sh
+```
+
+**Restore after fresh install:**
+```bash
+pkg install git -y
+git clone https://github.com/Liaquatali123/opencode-termux.git
+cd opencode-termux
+bash install.sh
+bash restore.sh backups/opencode-backup-YYYYMMDD-HHMMSS/
+opencode
+```
+
+---
+
 ## Fresh Termux Install
 
 ```bash
